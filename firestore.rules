@@ -1,0 +1,20 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Match any document in the 'rooms' collection
+    match /rooms/{roomCode} {
+
+      // Allow anyone who is anonymously signed in (request.auth != null) to:
+      // 1. Read a room's data (to check existence or join)
+      // 2. Create a new room
+      // 3. Update an existing room (for text syncing)
+      allow read, create, update: if request.auth != null;
+
+      // Deny client-side deletes.
+      // Our Cloud Function will handle this later.
+      allow delete: if false;
+    }
+  }
+}
