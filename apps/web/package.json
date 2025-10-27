@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@radix-ui/react-slot": "^1.2.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "firebase": "^12.4.0",
@@ -18,7 +19,8 @@
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "sonner": "^2.0.7",
-    "tailwind-merge": "^3.3.1"
+    "tailwind-merge": "^3.3.1",
+    "use-debounce": "^10.0.6"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
