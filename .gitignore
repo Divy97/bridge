@@ -1,0 +1,79 @@
+# ===================================================================
+# Node / pnpm
+# ===================================================================
+# node_modules
+/node_modules
+# pnpm debug logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+# pnpm lockfile
+/pnpm-lock.yaml
+
+# ===================================================================
+# Turborepo
+# ===================================================================
+# Local Turborepo cache
+.turbo
+
+# ===================================================================
+# Next.js (apps/web)
+# ===================================================================
+# Next.js build output
+/apps/web/.next
+# Next.js static output
+/apps/web/out
+# Local environment variables
+/apps/web/.env.local
+
+# ===================================================================
+# Firebase Functions (packages/functions)
+# ===================================================================
+# Firebase build output (if using TypeScript)
+/packages/functions/lib
+# Firebase emulators cache
+.firebase
+
+# ===================================================================
+# General
+# ===================================================================
+# Local environment variables
+.env.local
+.env.*.local
+.env
+
+# Build outputs
+/dist
+/build
+
+# Logs
+logs
+*.log
+*.log*
+
+# =OS
+# ===================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+# Windows
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+*.lnk
+
+# ===================================================================
+# IDEs
+# ===================================================================
+# VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# JetBrains (WebStorm, etc.)
+.idea
+*.iml
