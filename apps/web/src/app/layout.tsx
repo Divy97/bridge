@@ -27,7 +27,7 @@ export const metadata: Metadata = {
     title: "Bridge - Real-time Text Sharing",
     description: "Share text instantly between devices. No sign-up required.",
     type: "website",
-    url: "https://bridge.vercel.app",
+    url: "https://bridgee.vercel.app",
   },
 
   // --- Twitter Card ---
