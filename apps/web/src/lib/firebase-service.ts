@@ -21,12 +21,14 @@ export interface FileAttachmentData {
   id: string;
   name: string;
   type: string;
-  size: number;
+  size: number; // Compressed/actual size
+  originalSize?: number; // Original size before compression
   url: string;
   uploadedAt: Timestamp;
   expiresAt: Timestamp;
   data?: string; // Base64 data for free storage
   storageType?: "storage" | "base64"; // How file is stored
+  wasCompressed?: boolean; // Whether file was compressed
 }
 
 // Room document Schema
