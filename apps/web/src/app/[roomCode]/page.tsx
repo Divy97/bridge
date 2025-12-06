@@ -62,9 +62,25 @@ export default function RoomPage() {
   const roomCode = (params.roomCode as string)?.toUpperCase();
 
   // --- Debounced Text Update ---
-  const debouncedUpdate = useDebouncedCallback((newText: string) => {
+  const debouncedUpdate = useDebouncedCallback(async (newText: string) => {
     if (!roomCode) return;
-    updateRoomText(roomCode, newText);
+    try {
+      await updateRoomText(roomCode, newText);
+    } catch (err) {
+      console.error("Error updating room text:", err);
+      const errorMessage = err instanceof Error ? err.message : "Unknown error";
+      
+      // Check if it's an encryption error
+      if (errorMessage.includes("encryption") || errorMessage.includes("ENCRYPTION_KEY")) {
+        toast.error("Encryption Error", {
+          description: "Failed to encrypt text. Please check configuration.",
+        });
+      } else {
+        toast.error("Failed to save", {
+          description: "Could not update room text. Please try again.",
+        });
+      }
+    }
   }, 300);
 
   // --- Local Text Change Handler ---
@@ -90,7 +106,20 @@ export default function RoomPage() {
         }
       } catch (err) {
         console.error("Error fetching room:", err);
-        setError("Failed to load room.");
+        const errorMessage = err instanceof Error ? err.message : "Unknown error";
+        
+        // Check if it's an encryption error
+        if (errorMessage.includes("encryption") || errorMessage.includes("ENCRYPTION_KEY")) {
+          setError("Encryption configuration error. Please check environment variables.");
+          toast.error("Encryption Error", {
+            description: "Failed to decrypt room data. Please contact support.",
+          });
+        } else {
+          setError("Failed to load room.");
+          toast.error("Failed to load room", {
+            description: errorMessage,
+          });
+        }
       } finally {
         setLoading(false);
       }
