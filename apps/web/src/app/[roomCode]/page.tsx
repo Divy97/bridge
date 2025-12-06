@@ -295,6 +295,80 @@ export default function RoomPage() {
     return expiresAt.toDate() < new Date();
   };
 
+  // --- File Download Handler ---
+  const handleFileDownload = async (file: FileAttachmentData) => {
+    try {
+      // Check if it's a data URL (Base64) or regular URL
+      if (file.url.startsWith("data:")) {
+        // For Base64 data URLs, convert to blob URL for better browser compatibility
+        const response = await fetch(file.url);
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        
+        if (file.type === "application/pdf") {
+          // For PDFs, open in new tab with blob URL (works better than data URLs)
+          const newWindow = window.open(blobUrl, "_blank");
+          if (newWindow) {
+            // Clean up blob URL after window is closed or after delay
+            newWindow.addEventListener("beforeunload", () => {
+              URL.revokeObjectURL(blobUrl);
+            });
+            // Fallback cleanup after 5 minutes
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 5 * 60 * 1000);
+          } else {
+            // If popup blocked, trigger download instead
+            const a = document.createElement("a");
+            a.href = blobUrl;
+            a.download = file.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
+          }
+        } else {
+          // For other files, trigger download
+          const a = document.createElement("a");
+          a.href = blobUrl;
+          a.download = file.name;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
+        }
+      } else {
+        // For regular URLs (Firebase Storage)
+        if (file.type === "application/pdf") {
+          // Open PDF in new tab
+          const newWindow = window.open(file.url, "_blank");
+          if (!newWindow) {
+            // If popup blocked, fall back to download
+            const a = document.createElement("a");
+            a.href = file.url;
+            a.download = file.name;
+            a.target = "_blank";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }
+        } else {
+          // For other files, trigger download
+          const a = document.createElement("a");
+          a.href = file.url;
+          a.download = file.name;
+          a.target = "_blank";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }
+      }
+    } catch (err) {
+      console.error("Error downloading file:", err);
+      toast.error("Failed to open file", {
+        description: "Please try again.",
+      });
+    }
+  };
+
   // --- Render Logic: Loading State ---
   if (loading) {
     return (
@@ -461,8 +535,8 @@ export default function RoomPage() {
                               variant="ghost"
                               size="icon"
                               className="h-8 w-8"
-                              onClick={() => window.open(file.url, "_blank")}
-                              title="Download file"
+                              onClick={() => handleFileDownload(file)}
+                              title={file.type === "application/pdf" ? "Open PDF" : "Download file"}
                             >
                               <Download className="h-4 w-4" />
                             </Button>
