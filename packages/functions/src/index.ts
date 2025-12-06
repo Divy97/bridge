@@ -5,6 +5,7 @@ import * as admin from "firebase-admin";
 admin.initializeApp();
 
 const db = admin.firestore();
+const storage = admin.storage();
 
 /**
  * A scheduled function that runs every 5 hours.
@@ -44,5 +45,91 @@ export const cleanupOldRooms = functions
     await batch.commit();
 
     console.log(`Successfully deleted ${snapshot.size} old rooms.`);
+    return null;
+  });
+
+/**
+ * A scheduled function that runs every 5 minutes.
+ * It finds all files that have expired (30 minutes after upload)
+ * and deletes them from Storage and removes references from Firestore.
+ */
+export const cleanupExpiredFiles = functions
+  .region("asia-south1")
+  .pubsub.schedule("*/15 * * * *") // Every 15 minutes
+  .timeZone("Asia/Kolkata")
+  .onRun(async (context) => {
+    const now = admin.firestore.Timestamp.now();
+    console.log("Running expired files cleanup job at:", now.toDate());
+
+    // 1. Get all rooms
+    const roomsSnapshot = await db.collection("rooms").get();
+
+    if (roomsSnapshot.empty) {
+      console.log("No rooms found.");
+      return null;
+    }
+
+    let totalFilesDeleted = 0;
+    let totalFilesRemoved = 0;
+
+    // 2. Process each room
+    for (const roomDoc of roomsSnapshot.docs) {
+      const roomData = roomDoc.data();
+      const files = roomData.files || [];
+      
+      if (files.length === 0) continue;
+
+      const expiredFiles: string[] = [];
+      const validFiles: any[] = [];
+
+      // 3. Check each file for expiration
+      for (const file of files) {
+        if (file.expiresAt && file.expiresAt.toMillis() < now.toMillis()) {
+          expiredFiles.push(file.id);
+          
+          // Only delete from Storage if it's a storage type file
+          // Base64 files are stored in Firestore, so they're removed when we update the room
+          if (file.storageType === "storage" || !file.storageType) {
+            // Default to storage if type not specified (backward compatibility)
+            try {
+              const filePath = `rooms/${roomDoc.id}/${file.id}/${file.name}`;
+              const bucket = storage.bucket();
+              const fileRef = bucket.file(filePath);
+              
+              const [exists] = await fileRef.exists();
+              if (exists) {
+                await fileRef.delete();
+                totalFilesDeleted++;
+                console.log(`Deleted file from Storage: ${filePath}`);
+              }
+            } catch (error) {
+              console.error(`Error deleting file ${file.id} from Storage:`, error);
+              // Continue even if storage deletion fails
+            }
+          } else {
+            // Base64 file - just log, will be removed from Firestore below
+            console.log(`Removing Base64 file ${file.id} from Firestore`);
+          }
+        } else {
+          validFiles.push(file);
+        }
+      }
+
+      // 4. Update room document to remove expired files
+      if (expiredFiles.length > 0) {
+        await roomDoc.ref.update({
+          files: validFiles,
+          lastUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        totalFilesRemoved += expiredFiles.length;
+        console.log(
+          `Removed ${expiredFiles.length} expired files from room ${roomDoc.id}`
+        );
+      }
+    }
+
+    console.log(
+      `Cleanup complete. Deleted ${totalFilesDeleted} files from Storage, removed ${totalFilesRemoved} file references from Firestore.`
+    );
     return null;
   });

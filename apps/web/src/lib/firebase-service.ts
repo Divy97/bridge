@@ -16,9 +16,23 @@ import {
   FirestoreError,
 } from "firebase/firestore";
 
+// File attachment schema (stored in Firestore)
+export interface FileAttachmentData {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  url: string;
+  uploadedAt: Timestamp;
+  expiresAt: Timestamp;
+  data?: string; // Base64 data for free storage
+  storageType?: "storage" | "base64"; // How file is stored
+}
+
 // Room document Schema
 export interface Room {
   text: string;
+  files?: FileAttachmentData[];
   lastUpdatedAt: Timestamp;
   createdAt: Timestamp;
 }
@@ -117,6 +131,46 @@ export async function updateRoomText(roomCode: string, newText: string) {
   
   await updateDoc(roomRef, {
     text: encryptedText,
+    lastUpdatedAt: serverTimestamp(),
+  });
+}
+
+// Add a file attachment to a room
+export async function addFileToRoom(
+  roomCode: string,
+  fileAttachment: FileAttachmentData
+) {
+  await signInAnonymouslyIfNeeded();
+  const roomRef = doc(db, "rooms", roomCode);
+  const roomSnap = await getDoc(roomRef);
+  
+  if (!roomSnap.exists()) {
+    throw new Error("Room not found");
+  }
+
+  const currentFiles = (roomSnap.data() as Room).files || [];
+  
+  await updateDoc(roomRef, {
+    files: [...currentFiles, fileAttachment],
+    lastUpdatedAt: serverTimestamp(),
+  });
+}
+
+// Remove a file attachment from a room
+export async function removeFileFromRoom(roomCode: string, fileId: string) {
+  await signInAnonymouslyIfNeeded();
+  const roomRef = doc(db, "rooms", roomCode);
+  const roomSnap = await getDoc(roomRef);
+  
+  if (!roomSnap.exists()) {
+    throw new Error("Room not found");
+  }
+
+  const currentFiles = (roomSnap.data() as Room).files || [];
+  const updatedFiles = currentFiles.filter((f) => f.id !== fileId);
+  
+  await updateDoc(roomRef, {
+    files: updatedFiles,
     lastUpdatedAt: serverTimestamp(),
   });
 }
