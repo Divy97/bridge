@@ -6,13 +6,15 @@ export interface FileAttachment {
   id: string;
   name: string;
   type: string;
-  size: number;
+  size: number; // Compressed/actual size
+  originalSize?: number; // Original size before compression
   url: string;
   uploadedAt: Date;
   expiresAt: Date; // 30 minutes from upload
    // For Base64 storage
   data?: string; // Base64 encoded file data
   storageType?: "storage" | "base64"; // How the file is stored
+  wasCompressed?: boolean; // Whether file was compressed
 }
 
 // Storage limits
@@ -170,11 +172,13 @@ export function fileAttachmentToFirestore(
   name: string;
   type: string;
   size: number;
+  originalSize?: number;
   url: string;
   uploadedAt: Timestamp;
   expiresAt: Timestamp;
   data?: string;
   storageType?: "storage" | "base64";
+  wasCompressed?: boolean;
 } {
   const result: any = {
     id: attachment.id,
@@ -186,6 +190,11 @@ export function fileAttachmentToFirestore(
     expiresAt: Timestamp.fromDate(attachment.expiresAt),
   };
   
+  // Include original size if file was compressed
+  if (attachment.originalSize !== undefined) {
+    result.originalSize = attachment.originalSize;
+  }
+  
   // Include Base64 data if present
   if (attachment.data) {
     result.data = attachment.data;
@@ -193,6 +202,10 @@ export function fileAttachmentToFirestore(
   
   if (attachment.storageType) {
     result.storageType = attachment.storageType;
+  }
+  
+  if (attachment.wasCompressed !== undefined) {
+    result.wasCompressed = attachment.wasCompressed;
   }
   
   return result;
