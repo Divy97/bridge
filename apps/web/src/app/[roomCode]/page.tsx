@@ -7,8 +7,18 @@ import {
   getRoom,
   streamRoom,
   updateRoomText,
+  addFileToRoom,
+  removeFileFromRoom,
   Room,
+  FileAttachmentData,
 } from "@/lib/firebase-service";
+import {
+  uploadFile,
+  fileAttachmentToFirestore,
+  isImageType,
+  formatFileSize,
+  deleteFile,
+} from "@/lib/file-service";
 import { useDebouncedCallback } from "use-debounce";
 import {
   Card,
@@ -31,6 +41,11 @@ import {
   EyeOff,
   Sun,
   Moon,
+  Upload,
+  X,
+  Image as ImageIcon,
+  File,
+  Shield,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Timestamp } from "firebase/firestore";
@@ -54,6 +69,8 @@ export default function RoomPage() {
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [showStats, setShowStats] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [showFiles, setShowFiles] = useState(true);
 
   const params = useParams();
   const router = useRouter();
@@ -185,6 +202,99 @@ export default function RoomPage() {
     }
   };
 
+  // --- File Upload Handler ---
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !roomCode) return;
+
+    // Check if a file already exists - only allow 1 file
+    if (room?.files && room.files.length > 0) {
+      toast.error("File already attached", {
+        description: "Only 1 file is allowed per room. Please remove the existing file first.",
+      });
+      e.target.value = "";
+      return;
+    }
+
+    // Pre-validate file size: Only files under 500KB are allowed
+    const MAX_SIZE = 500 * 1024; // 500KB
+    if (file.size > MAX_SIZE) {
+      toast.error("File too large", {
+        description: `Only files under 500KB are allowed. Your file is ${formatFileSize(file.size)}. Please choose a smaller file.`,
+        duration: 5000,
+      });
+      e.target.value = "";
+      return;
+    }
+
+    setUploading(true);
+    try {
+      // Use Base64 storage (free, no Firebase Storage needed)
+      // Only files under 500KB are allowed
+      const attachment = await uploadFile(file, roomCode, true);
+      const fileData = fileAttachmentToFirestore(attachment);
+      await addFileToRoom(roomCode, fileData);
+      
+      const fileSizeDisplay = formatFileSize(file.size);
+      toast.success("File uploaded!", {
+        description: `${file.name} (${fileSizeDisplay}) - auto-deletes in 30 minutes.`,
+      });
+    } catch (err) {
+      console.error("Error uploading file:", err);
+      const errorMessage = err instanceof Error ? err.message : "Unknown error";
+      
+      // Show graceful error messages
+      if (errorMessage.includes("500KB") || errorMessage.includes("size")) {
+        toast.error("File size limit exceeded", {
+          description: errorMessage,
+          duration: 5000,
+        });
+      } else if (errorMessage.includes("not supported") || errorMessage.includes("type")) {
+        toast.error("File type not supported", {
+          description: errorMessage,
+          duration: 5000,
+        });
+      } else {
+        toast.error("Upload failed", {
+          description: errorMessage,
+          duration: 5000,
+        });
+      }
+    } finally {
+      setUploading(false);
+      // Reset input
+      e.target.value = "";
+    }
+  };
+
+  // --- File Delete Handler ---
+  const handleFileDelete = async (
+    fileId: string,
+    fileName: string,
+    storageType?: "storage" | "base64"
+  ) => {
+    if (!roomCode) return;
+    try {
+      await removeFileFromRoom(roomCode, fileId);
+      await deleteFile(roomCode, fileId, fileName, storageType);
+      toast.success("File removed", {
+        description: `${fileName} has been removed from the room.`,
+      });
+    } catch (err) {
+      console.error("Error deleting file:", err);
+      toast.error("Failed to remove file", {
+        description: "Please try again.",
+        duration: 3000,
+      });
+    }
+  };
+
+  // --- Check if file is expired ---
+  const isFileExpired = (expiresAt: Timestamp): boolean => {
+    if (!expiresAt) return false;
+    return expiresAt.toDate() < new Date();
+  };
+
   // --- Render Logic: Loading State ---
   if (loading) {
     return (
@@ -269,13 +379,126 @@ export default function RoomPage() {
         </CardHeader>
 
         {/* Card Content: The Editor (Stretches to fill space) */}
-        <CardContent className="flex flex-1 p-0 min-h-0">
-          <Textarea
-            value={room?.text || ""}
-            onChange={handleTextChange}
-            placeholder="Start typing..."
-            className="h-full w-full flex-1 resize-none border-0 bg-transparent p-6 font-mono text-base focus-visible:ring-0 overflow-y-auto"
-          />
+        <CardContent className="flex flex-1 flex-col p-0 min-h-0">
+          {/* Files Section */}
+          {showFiles && room?.files && room.files.length > 0 && (
+            <div className="border-b p-4 space-y-3 max-h-64 overflow-y-auto">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <File className="h-4 w-4" />
+                  Attached File
+                </h3>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Shield className="h-3 w-3" />
+                  <span>Auto-deletes in 30 min</span>
+                </div>
+              </div>
+              <div className="bg-muted/50 border border-primary/20 rounded-md p-2 text-xs text-muted-foreground flex items-start gap-2">
+                <Shield className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                <div className="flex-1">
+                  <div>
+                    <strong>Privacy Feature:</strong> All uploaded files are automatically deleted after 30 minutes for your privacy and security.
+                  </div>
+                  <div className="mt-1.5 text-[10px] opacity-90 font-medium">
+                    📦 <strong>File Size Limit:</strong> Only files under 500KB are allowed. Files are stored for free using Base64 encoding.
+                  </div>
+                </div>
+              </div>
+              <div className="space-y-3">
+                {room.files.map((file) => {
+                  const expired = isFileExpired(file.expiresAt);
+                  return (
+                    <div
+                      key={file.id}
+                      className={`relative group border rounded-lg p-3 ${
+                        expired ? "opacity-50" : ""
+                      }`}
+                    >
+                      {isImageType(file.type) ? (
+                        <div className="space-y-2">
+                          <div className="relative group/image">
+                            <img
+                              src={file.url}
+                              alt={file.name}
+                              className="w-full h-32 object-cover rounded"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).style.display = "none";
+                              }}
+                            />
+                            {/* Remove button overlay for images */}
+                            <Button
+                              variant="destructive"
+                              size="icon"
+                              className="absolute top-2 right-2 h-7 w-7 opacity-0 group-hover/image:opacity-100 transition-opacity bg-destructive/90 hover:bg-destructive"
+                              onClick={() => handleFileDelete(file.id, file.name, file.storageType)}
+                              title="Remove file"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-muted-foreground truncate flex-1" title={file.name}>
+                              {file.name}
+                            </span>
+                            <span className="text-xs text-muted-foreground ml-2">
+                              {formatFileSize(file.size)}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 flex-1 min-w-0">
+                            <File className="h-4 w-4 flex-shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm truncate">{file.name}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {formatFileSize(file.size)}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => window.open(file.url, "_blank")}
+                              title="Download file"
+                            >
+                              <Download className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="destructive"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => handleFileDelete(file.id, file.name, file.storageType)}
+                              title="Remove file"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                      {expired && (
+                        <div className="absolute inset-0 bg-background/50 rounded-lg flex items-center justify-center">
+                          <span className="text-xs text-muted-foreground">Expired</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Text Editor */}
+          <div className="flex-1 flex flex-col min-h-0">
+            <Textarea
+              value={room?.text || ""}
+              onChange={handleTextChange}
+              placeholder="Start typing..."
+              className="h-full w-full flex-1 resize-none border-0 bg-transparent p-6 font-mono text-base focus-visible:ring-0 overflow-y-auto"
+            />
+          </div>
         </CardContent>
 
         {/* Card Footer: Stats & Text Actions */}
@@ -315,8 +538,44 @@ export default function RoomPage() {
             )}
           </div>
 
-          {/* Right Side: Text Actions */}
+          {/* Right Side: Actions */}
           <div className="flex items-center space-x-2">
+            {/* File Upload - Better UX with text label */}
+            {!room?.files || room.files.length === 0 ? (
+              <div className="relative">
+                <input
+                  type="file"
+                  id="file-upload"
+                  className="hidden"
+                  onChange={handleFileUpload}
+                  accept="image/*,.pdf,.txt,.json,.csv,.md"
+                  disabled={uploading}
+                  multiple={false}
+                />
+                <Button
+                  variant="outline"
+                  onClick={() => document.getElementById("file-upload")?.click()}
+                  disabled={uploading}
+                  className="gap-2"
+                >
+                  {uploading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Uploading...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="h-4 w-4" />
+                      Upload File
+                    </>
+                  )}
+                </Button>
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground px-2">
+                1 file attached
+              </div>
+            )}
             <Button
               onClick={downloadText}
               disabled={!room?.text}
