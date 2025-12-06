@@ -19,6 +19,12 @@ import {
   formatFileSize,
   deleteFile,
 } from "@/lib/file-service";
+import {
+  shouldOfferCompression,
+  getCompressionEstimate,
+  compressFile,
+  CompressionEstimate,
+} from "@/lib/compression-service";
 import { useDebouncedCallback } from "use-debounce";
 import {
   Card,
@@ -71,6 +77,12 @@ export default function RoomPage() {
   const [showStats, setShowStats] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [showFiles, setShowFiles] = useState(true);
+  const [showCompressionDialog, setShowCompressionDialog] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [compressionEstimate, setCompressionEstimate] = useState<CompressionEstimate | null>(null);
+  const [compressing, setCompressing] = useState(false);
+  const [compressionProgress, setCompressionProgress] = useState(0);
+  const [imageQuality, setImageQuality] = useState(0.8);
 
   const params = useParams();
   const router = useRouter();
@@ -219,13 +231,46 @@ export default function RoomPage() {
     // Pre-validate file size: Only files under 500KB are allowed
     const MAX_SIZE = 500 * 1024; // 500KB
     if (file.size > MAX_SIZE) {
-      toast.error("File too large", {
-        description: `Only files under 500KB are allowed. Your file is ${formatFileSize(file.size)}. Please choose a smaller file.`,
-        duration: 5000,
-      });
-      e.target.value = "";
-      return;
+      // Check if compression is available for this file type
+      if (shouldOfferCompression(file)) {
+        // Show loading state while getting estimate
+        setUploading(true);
+        try {
+          // Get compression estimate (uses test compression for accuracy)
+          const estimate = await getCompressionEstimate(file, imageQuality);
+          setPendingFile(file);
+          setCompressionEstimate(estimate);
+          setShowCompressionDialog(true);
+        } catch (err) {
+          console.error("Error getting compression estimate:", err);
+          toast.error("Could not estimate compression", {
+            description: "Please try uploading the file anyway or choose a smaller file.",
+            duration: 5000,
+          });
+        } finally {
+          setUploading(false);
+        }
+        e.target.value = "";
+        return;
+      } else {
+        // File type doesn't support compression
+        toast.error("File too large", {
+          description: `Only files under 500KB are allowed. Your file is ${formatFileSize(file.size)}. Please choose a smaller file.`,
+          duration: 5000,
+        });
+        e.target.value = "";
+        return;
+      }
     }
+
+    // File is under limit, upload directly
+    await uploadFileDirectly(file);
+    e.target.value = "";
+  };
+
+  // --- Direct Upload (without compression) ---
+  const uploadFileDirectly = async (file: File) => {
+    if (!roomCode) return;
 
     setUploading(true);
     try {
@@ -262,9 +307,104 @@ export default function RoomPage() {
       }
     } finally {
       setUploading(false);
-      // Reset input
-      e.target.value = "";
     }
+  };
+
+  // --- Compression and Upload Handler ---
+  const handleCompressAndUpload = async () => {
+    if (!pendingFile || !roomCode || !compressionEstimate) return;
+
+    setCompressing(true);
+    setCompressionProgress(0);
+
+    try {
+      // Compress the file
+      const quality = pendingFile.type.startsWith("image/") ? imageQuality : undefined;
+      const result = await compressFile(
+        pendingFile,
+        500, // 500KB max
+        quality,
+        (progress) => {
+          setCompressionProgress(progress);
+        }
+      );
+
+      // Check if compressed file is still too large
+      if (result.compressedSize > 500 * 1024) {
+        toast.error("Compression insufficient", {
+          description: `Compressed file is still ${formatFileSize(result.compressedSize)} (limit: 500KB). Please try a different file${pendingFile.type.startsWith("image/") ? " or lower quality" : ""}.`,
+          duration: 6000,
+        });
+        setCompressing(false);
+        setCompressionProgress(0);
+        return;
+      }
+
+      // Check if compression actually helped
+      if (result.compressedSize >= result.originalSize) {
+        toast.error("Compression didn't reduce size", {
+          description: `The file couldn't be compressed further. Original size: ${formatFileSize(result.originalSize)}.`,
+          duration: 5000,
+        });
+        setCompressing(false);
+        setCompressionProgress(0);
+        return;
+      }
+
+      // Upload the compressed file
+      const attachment = await uploadFile(result.compressedFile, roomCode, true);
+      
+      // Update attachment with compression info
+      attachment.originalSize = result.originalSize;
+      attachment.wasCompressed = true;
+      
+      const fileData = fileAttachmentToFirestore(attachment);
+      await addFileToRoom(roomCode, fileData);
+
+      const compressionRatio = result.compressionRatio.toFixed(1);
+      toast.success("File compressed and uploaded!", {
+        description: `${pendingFile.name} - Reduced by ${compressionRatio}% (${formatFileSize(result.originalSize)} → ${formatFileSize(result.compressedSize)})`,
+        duration: 5000,
+      });
+
+      // Close dialog and reset
+      setShowCompressionDialog(false);
+      setPendingFile(null);
+      setCompressionEstimate(null);
+      setCompressionProgress(0);
+    } catch (err) {
+      console.error("Error compressing file:", err);
+      const errorMessage = err instanceof Error ? err.message : "Unknown error";
+      
+      // Handle specific compression errors
+      if (errorMessage.includes("Failed to compress")) {
+        toast.error("Compression failed", {
+          description: errorMessage,
+          duration: 6000,
+        });
+      } else if (errorMessage.includes("not supported")) {
+        toast.error("Compression not supported", {
+          description: "This file type cannot be compressed. Please try a different file.",
+          duration: 5000,
+        });
+      } else {
+        toast.error("Compression failed", {
+          description: "An error occurred while compressing. Please try again or use a different file.",
+          duration: 5000,
+        });
+      }
+    } finally {
+      setCompressing(false);
+      setCompressionProgress(0);
+    }
+  };
+
+  // --- Cancel Compression ---
+  const handleCancelCompression = () => {
+    setShowCompressionDialog(false);
+    setPendingFile(null);
+    setCompressionEstimate(null);
+    setCompressionProgress(0);
   };
 
   // --- File Delete Handler ---
@@ -526,7 +666,16 @@ export default function RoomPage() {
                             <div className="min-w-0 flex-1">
                               <p className="text-sm truncate">{file.name}</p>
                               <p className="text-xs text-muted-foreground">
-                                {formatFileSize(file.size)}
+                                {file.originalSize && file.originalSize > file.size ? (
+                                  <>
+                                    {formatFileSize(file.size)}{" "}
+                                    <span className="text-muted-foreground/70">
+                                      (was {formatFileSize(file.originalSize)})
+                                    </span>
+                                  </>
+                                ) : (
+                                  formatFileSize(file.size)
+                                )}
                               </p>
                             </div>
                           </div>
@@ -684,6 +833,131 @@ export default function RoomPage() {
           </p>
         </div>
       </Card>
+
+      {/* Compression Dialog */}
+      {showCompressionDialog && pendingFile && compressionEstimate && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="max-w-md w-full shadow-2xl">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <File className="h-5 w-5" />
+                Compress File?
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <p className="text-sm font-medium mb-1">File: {pendingFile.name}</p>
+                <div className="text-sm text-muted-foreground space-y-1">
+                  <div className="flex justify-between">
+                    <span>Original size:</span>
+                    <span className="font-medium">{formatFileSize(compressionEstimate.originalSize)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Estimated size:</span>
+                    <span className="font-medium text-primary">
+                      {formatFileSize(compressionEstimate.estimatedSize)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs pt-1 border-t">
+                    <span>Reduction:</span>
+                    <span className="font-medium">
+                      {(
+                        ((compressionEstimate.originalSize - compressionEstimate.estimatedSize) /
+                          compressionEstimate.originalSize) *
+                        100
+                      ).toFixed(1)}
+                      %
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {pendingFile.type.startsWith("image/") && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">
+                    Quality: {Math.round(imageQuality * 100)}%
+                  </label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="0.95"
+                    step="0.05"
+                    value={imageQuality}
+                    onChange={async (e) => {
+                      const newQuality = parseFloat(e.target.value);
+                      setImageQuality(newQuality);
+                      // Recalculate estimate with new quality
+                      if (pendingFile) {
+                        try {
+                          const newEstimate = await getCompressionEstimate(pendingFile, newQuality);
+                          setCompressionEstimate(newEstimate);
+                        } catch (err) {
+                          console.error("Error recalculating estimate:", err);
+                        }
+                      }
+                    }}
+                    className="w-full"
+                    disabled={compressing}
+                  />
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Lower quality (smaller)</span>
+                    <span>Higher quality (larger)</span>
+                  </div>
+                </div>
+              )}
+
+              {pendingFile.type === "application/pdf" && (
+                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-md p-2 text-xs text-yellow-700 dark:text-yellow-400">
+                  <strong>Note:</strong> PDF compression has limited effectiveness. The file may not compress significantly. If compression doesn't work, please try a different file or reduce the PDF size using external tools.
+                </div>
+              )}
+
+              {compressionEstimate.estimatedSize > 500 * 1024 && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-md p-2 text-xs text-red-700 dark:text-red-400">
+                  <strong>Warning:</strong> Even after compression, the estimated size ({formatFileSize(compressionEstimate.estimatedSize)}) may still exceed the 500KB limit. Compression may not be sufficient for this file.
+                </div>
+              )}
+
+              {compressing && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span>Compressing...</span>
+                    <span>{compressionProgress}%</span>
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-2">
+                    <div
+                      className="bg-primary h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${compressionProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </CardContent>
+            <CardFooter className="flex gap-2 justify-end">
+              <Button
+                variant="outline"
+                onClick={handleCancelCompression}
+                disabled={compressing}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleCompressAndUpload}
+                disabled={compressing || !compressionEstimate.canCompress}
+              >
+                {compressing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Compressing...
+                  </>
+                ) : (
+                  "Compress & Upload"
+                )}
+              </Button>
+            </CardFooter>
+          </Card>
+        </div>
+      )}
     </main>
   );
 }
