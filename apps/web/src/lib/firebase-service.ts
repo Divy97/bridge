@@ -1,5 +1,6 @@
 import { auth, db } from "@/lib/firebase";
 import { generateRoomCode } from "@/lib/room-code";
+import { encryptText, decryptText } from "@/lib/crypto";
 import { signInAnonymously } from "firebase/auth";
 import {
   doc,
@@ -10,7 +11,9 @@ import {
   Timestamp,
   updateDoc, 
   onSnapshot, 
-  Unsubscribe, 
+  Unsubscribe,
+  DocumentSnapshot,
+  FirestoreError,
 } from "firebase/firestore";
 
 // Room document Schema
@@ -56,8 +59,17 @@ export async function createRoom(): Promise<string> {
     throw new Error("Failed to create room reference");
   }
 
+  // Encrypt the initial empty text using the room code
+  let encryptedText: string;
+  try {
+    encryptedText = await encryptText("", roomCode);
+  } catch (error) {
+    console.error("Failed to encrypt initial text:", error);
+    throw new Error("Failed to encrypt text. Please check encryption configuration.");
+  }
+
   const newRoom: Room = {
-    text: "", // Start with empty text
+    text: encryptedText, // Store encrypted text
     lastUpdatedAt: serverTimestamp() as Timestamp,
     createdAt: serverTimestamp() as Timestamp,
   };
@@ -74,7 +86,19 @@ export async function getRoom(roomCode: string): Promise<Room | null> {
   if (!roomSnap.exists()) {
     return null;
   }
-  return roomSnap.data() as Room;
+  const roomData = roomSnap.data() as Room;
+  
+  // Decrypt the text before returning
+  if (roomData.text) {
+    try {
+      roomData.text = await decryptText(roomData.text, roomCode);
+    } catch (error) {
+      console.error("Failed to decrypt room text:", error);
+      throw new Error("Failed to decrypt room data. Please check encryption configuration.");
+    }
+  }
+  
+  return roomData;
 }
 
 // Update the text content of a room
@@ -82,8 +106,17 @@ export async function updateRoomText(roomCode: string, newText: string) {
   await signInAnonymouslyIfNeeded();
   const roomRef = doc(db, "rooms", roomCode);
   
+  // Encrypt the text before storing using the room code
+  let encryptedText: string;
+  try {
+    encryptedText = await encryptText(newText, roomCode);
+  } catch (error) {
+    console.error("Failed to encrypt text:", error);
+    throw new Error("Failed to encrypt text. Please check encryption configuration.");
+  }
+  
   await updateDoc(roomRef, {
-    text: newText,
+    text: encryptedText,
     lastUpdatedAt: serverTimestamp(),
   });
 }
@@ -97,18 +130,29 @@ export function streamRoom(
   
   const unsubscribe = onSnapshot(
     roomRef,
-    (docSnap) => {
+    async (docSnap: DocumentSnapshot) => {
       if (docSnap.exists()) {
         const roomData = docSnap.data() as Room;
+        
+        // Decrypt the text before calling the callback
+        if (roomData.text) {
+          try {
+            roomData.text = await decryptText(roomData.text, roomCode);
+          } catch (error) {
+            console.error("Failed to decrypt room text:", error);
+            // Continue with encrypted text if decryption fails
+          }
+        }
+        
         onRoomUpdate(roomData);
       } else {
         // This case would be handled if the room gets deleted
         console.warn(`Room ${roomCode} no longer exists.`);
       }
     },
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    (_error) => {
-      // Ignore error
+    (error: FirestoreError) => {
+      console.error("Firestore snapshot error:", error);
+      // Don't silently ignore errors in production - log them
     }
   );
 
