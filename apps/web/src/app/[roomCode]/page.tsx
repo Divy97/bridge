@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -15,7 +15,6 @@ import {
 import {
   uploadFile,
   fileAttachmentToFirestore,
-  isImageType,
   formatFileSize,
   deleteFile,
 } from "@/lib/file-service";
@@ -26,80 +25,70 @@ import {
   CompressionEstimate,
 } from "@/lib/compression-service";
 import { useDebouncedCallback } from "use-debounce";
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
 import {
   Loader2,
   Home,
   Copy,
-  Users,
-  Clock,
   Share2,
   Download,
-  Eye,
-  EyeOff,
   Sun,
   Moon,
   Upload,
-  X,
-  Image as ImageIcon,
-  File,
-  Shield,
+  Check,
+  CloudOff,
+  ArrowLeft,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Timestamp } from "firebase/firestore";
-
-/**
- * Helper to safely format a Firebase Timestamp
- */
-const formatDate = (timestamp: Timestamp | undefined) => {
-  if (timestamp && typeof timestamp.toDate === "function") {
-    return timestamp.toDate().toLocaleString(undefined, {
-      dateStyle: "short",
-      timeStyle: "short",
-    });
-  }
-  return "N/A";
-};
+import { CompressionDialog } from "@/components/compression-dialog";
+import { FileSection } from "@/components/file-section";
 
 export default function RoomPage() {
   const [room, setRoom] = useState<Room | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [showStats, setShowStats] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [showFiles, setShowFiles] = useState(true);
   const [showCompressionDialog, setShowCompressionDialog] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [compressionEstimate, setCompressionEstimate] = useState<CompressionEstimate | null>(null);
   const [compressing, setCompressing] = useState(false);
   const [compressionProgress, setCompressionProgress] = useState(0);
   const [imageQuality, setImageQuality] = useState(0.8);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const [isDragOver, setIsDragOver] = useState(false);
 
+  const dragCounter = useRef(0);
+  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const params = useParams();
   const router = useRouter();
   const { theme, setTheme } = useTheme();
 
   const roomCode = (params.roomCode as string)?.toUpperCase();
 
-  // --- Debounced Text Update ---
+  const charCount = room?.text?.length || 0;
+  const wordCount = room?.text?.trim() ? room.text.trim().split(/\s+/).length : 0;
+
   const debouncedUpdate = useDebouncedCallback(async (newText: string) => {
     if (!roomCode) return;
+    setSaveStatus("saving");
     try {
       await updateRoomText(roomCode, newText);
+      setSaveStatus("saved");
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
     } catch (err) {
       console.error("Error updating room text:", err);
+      setSaveStatus("idle");
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      
-      // Check if it's an encryption error
       if (errorMessage.includes("encryption") || errorMessage.includes("ENCRYPTION_KEY")) {
         toast.error("Encryption Error", {
           description: "Failed to encrypt text. Please check configuration.",
@@ -112,17 +101,14 @@ export default function RoomPage() {
     }
   }, 300);
 
-  // --- Local Text Change Handler ---
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newText = e.target.value;
     setRoom((prevRoom) => (prevRoom ? { ...prevRoom, text: newText } : null));
     debouncedUpdate(newText);
   };
 
-  // --- Effect 1: Initial Data Fetch ---
   useEffect(() => {
     if (!roomCode) return;
-
     const fetchRoom = async () => {
       try {
         const roomData = await getRoom(roomCode);
@@ -136,8 +122,6 @@ export default function RoomPage() {
       } catch (err) {
         console.error("Error fetching room:", err);
         const errorMessage = err instanceof Error ? err.message : "Unknown error";
-        
-        // Check if it's an encryption error
         if (errorMessage.includes("encryption") || errorMessage.includes("ENCRYPTION_KEY")) {
           setError("Encryption configuration error. Please check environment variables.");
           toast.error("Encryption Error", {
@@ -145,34 +129,27 @@ export default function RoomPage() {
           });
         } else {
           setError("Failed to load room.");
-          toast.error("Failed to load room", {
-            description: errorMessage,
-          });
+          toast.error("Failed to load room", { description: errorMessage });
         }
       } finally {
         setLoading(false);
       }
     };
-
     fetchRoom();
   }, [roomCode, router]);
 
-  // --- Effect 2: Real-time Listener ---
   useEffect(() => {
     if (loading || error || !roomCode) return;
-
     const unsubscribe = streamRoom(roomCode, (liveRoomData) => {
       setRoom(liveRoomData);
       setIsConnected(true);
     });
-
     return () => {
       unsubscribe();
       setIsConnected(false);
     };
   }, [roomCode, loading, error]);
 
-  // --- Action Handlers ---
   const copyText = () => {
     if (room?.text) {
       navigator.clipboard.writeText(room.text);
@@ -201,7 +178,6 @@ export default function RoomPage() {
       if (navigator.share) {
         await navigator.share({
           title: `Bridge Room ${roomCode}`,
-          text: `Join my Bridge room: ${roomCode}`,
           url: roomUrl,
         });
       } else {
@@ -209,34 +185,26 @@ export default function RoomPage() {
       }
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (_error) {
-      navigator.clipboard.writeText(roomUrl);
+      await navigator.clipboard.writeText(roomUrl);
       toast.success("Room URL copied to clipboard!");
     }
   };
 
-  // --- File Upload Handler ---
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !roomCode) return;
+  const processFile = useCallback(async (file: File) => {
+    if (!roomCode) return;
 
-    // Check if a file already exists - only allow 1 file
     if (room?.files && room.files.length > 0) {
       toast.error("File already attached", {
         description: "Only 1 file is allowed per room. Please remove the existing file first.",
       });
-      e.target.value = "";
       return;
     }
 
-    // Pre-validate file size: Only files under 500KB are allowed
-    const MAX_SIZE = 500 * 1024; // 500KB
+    const MAX_SIZE = 500 * 1024;
     if (file.size > MAX_SIZE) {
-      // Check if compression is available for this file type
       if (shouldOfferCompression(file)) {
-        // Show loading state while getting estimate
         setUploading(true);
         try {
-          // Get compression estimate (uses test compression for accuracy)
           const estimate = await getCompressionEstimate(file, imageQuality);
           setPendingFile(file);
           setCompressionEstimate(estimate);
@@ -244,162 +212,109 @@ export default function RoomPage() {
         } catch (err) {
           console.error("Error getting compression estimate:", err);
           toast.error("Could not estimate compression", {
-            description: "Please try uploading the file anyway or choose a smaller file.",
+            description: "Please try a smaller file.",
             duration: 5000,
           });
         } finally {
           setUploading(false);
         }
-        e.target.value = "";
-        return;
-      } else {
-        // File type doesn't support compression
-        toast.error("File too large", {
-          description: `Only files under 500KB are allowed. Your file is ${formatFileSize(file.size)}. Please choose a smaller file.`,
-          duration: 5000,
-        });
-        e.target.value = "";
         return;
       }
+      toast.error("File too large", {
+        description: `Only files under 500KB are allowed. Your file is ${formatFileSize(file.size)}.`,
+        duration: 5000,
+      });
+      return;
     }
 
-    // File is under limit, upload directly
     await uploadFileDirectly(file);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomCode, room?.files, imageQuality]);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processFile(file);
     e.target.value = "";
   };
 
-  // --- Direct Upload (without compression) ---
   const uploadFileDirectly = async (file: File) => {
     if (!roomCode) return;
-
     setUploading(true);
     try {
-      // Use Base64 storage (free, no Firebase Storage needed)
-      // Only files under 500KB are allowed
       const attachment = await uploadFile(file, roomCode, true);
       const fileData = fileAttachmentToFirestore(attachment);
       await addFileToRoom(roomCode, fileData);
-      
-      const fileSizeDisplay = formatFileSize(file.size);
       toast.success("File uploaded!", {
-        description: `${file.name} (${fileSizeDisplay}) - auto-deletes in 30 minutes.`,
+        description: `${file.name} (${formatFileSize(file.size)}) - auto-deletes in 30 minutes.`,
       });
     } catch (err) {
       console.error("Error uploading file:", err);
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      
-      // Show graceful error messages
       if (errorMessage.includes("500KB") || errorMessage.includes("size")) {
-        toast.error("File size limit exceeded", {
-          description: errorMessage,
-          duration: 5000,
-        });
+        toast.error("File size limit exceeded", { description: errorMessage, duration: 5000 });
       } else if (errorMessage.includes("not supported") || errorMessage.includes("type")) {
-        toast.error("File type not supported", {
-          description: errorMessage,
-          duration: 5000,
-        });
+        toast.error("File type not supported", { description: errorMessage, duration: 5000 });
       } else {
-        toast.error("Upload failed", {
-          description: errorMessage,
-          duration: 5000,
-        });
+        toast.error("Upload failed", { description: errorMessage, duration: 5000 });
       }
     } finally {
       setUploading(false);
     }
   };
 
-  // --- Compression and Upload Handler ---
   const handleCompressAndUpload = async () => {
     if (!pendingFile || !roomCode || !compressionEstimate) return;
-
     setCompressing(true);
     setCompressionProgress(0);
-
     try {
-      // Compress the file
       const quality = pendingFile.type.startsWith("image/") ? imageQuality : undefined;
-      const result = await compressFile(
-        pendingFile,
-        500, // 500KB max
-        quality,
-        (progress) => {
-          setCompressionProgress(progress);
-        }
-      );
-
-      // Check if compressed file is still too large
+      const result = await compressFile(pendingFile, 500, quality, (progress) => {
+        setCompressionProgress(progress);
+      });
       if (result.compressedSize > 500 * 1024) {
         toast.error("Compression insufficient", {
-          description: `Compressed file is still ${formatFileSize(result.compressedSize)} (limit: 500KB). Please try a different file${pendingFile.type.startsWith("image/") ? " or lower quality" : ""}.`,
+          description: `Compressed file is still ${formatFileSize(result.compressedSize)} (limit: 500KB).`,
           duration: 6000,
         });
         setCompressing(false);
         setCompressionProgress(0);
         return;
       }
-
-      // Check if compression actually helped
       if (result.compressedSize >= result.originalSize) {
         toast.error("Compression didn't reduce size", {
-          description: `The file couldn't be compressed further. Original size: ${formatFileSize(result.originalSize)}.`,
+          description: `Original size: ${formatFileSize(result.originalSize)}.`,
           duration: 5000,
         });
         setCompressing(false);
         setCompressionProgress(0);
         return;
       }
-
-      // Upload the compressed file
       const attachment = await uploadFile(result.compressedFile, roomCode, true);
-      
-      // Update attachment with compression info
       attachment.originalSize = result.originalSize;
       attachment.wasCompressed = true;
-      
       const fileData = fileAttachmentToFirestore(attachment);
       await addFileToRoom(roomCode, fileData);
-
-      const compressionRatio = result.compressionRatio.toFixed(1);
       toast.success("File compressed and uploaded!", {
-        description: `${pendingFile.name} - Reduced by ${compressionRatio}% (${formatFileSize(result.originalSize)} → ${formatFileSize(result.compressedSize)})`,
+        description: `Reduced by ${result.compressionRatio.toFixed(1)}% (${formatFileSize(result.originalSize)} → ${formatFileSize(result.compressedSize)})`,
         duration: 5000,
       });
-
-      // Close dialog and reset
       setShowCompressionDialog(false);
       setPendingFile(null);
       setCompressionEstimate(null);
       setCompressionProgress(0);
     } catch (err) {
       console.error("Error compressing file:", err);
-      const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      
-      // Handle specific compression errors
-      if (errorMessage.includes("Failed to compress")) {
-        toast.error("Compression failed", {
-          description: errorMessage,
-          duration: 6000,
-        });
-      } else if (errorMessage.includes("not supported")) {
-        toast.error("Compression not supported", {
-          description: "This file type cannot be compressed. Please try a different file.",
-          duration: 5000,
-        });
-      } else {
-        toast.error("Compression failed", {
-          description: "An error occurred while compressing. Please try again or use a different file.",
-          duration: 5000,
-        });
-      }
+      toast.error("Compression failed", {
+        description: "Please try again or use a different file.",
+        duration: 5000,
+      });
     } finally {
       setCompressing(false);
       setCompressionProgress(0);
     }
   };
 
-  // --- Cancel Compression ---
   const handleCancelCompression = () => {
     setShowCompressionDialog(false);
     setPendingFile(null);
@@ -407,7 +322,18 @@ export default function RoomPage() {
     setCompressionProgress(0);
   };
 
-  // --- File Delete Handler ---
+  const handleQualityChange = async (quality: number) => {
+    setImageQuality(quality);
+    if (pendingFile) {
+      try {
+        const newEstimate = await getCompressionEstimate(pendingFile, quality);
+        setCompressionEstimate(newEstimate);
+      } catch (err) {
+        console.error("Error recalculating estimate:", err);
+      }
+    }
+  };
+
   const handleFileDelete = async (
     fileId: string,
     fileName: string,
@@ -417,46 +343,30 @@ export default function RoomPage() {
     try {
       await removeFileFromRoom(roomCode, fileId);
       await deleteFile(roomCode, fileId, fileName, storageType);
-      toast.success("File removed", {
-        description: `${fileName} has been removed from the room.`,
-      });
+      toast.success("File removed", { description: `${fileName} has been removed.` });
     } catch (err) {
       console.error("Error deleting file:", err);
-      toast.error("Failed to remove file", {
-        description: "Please try again.",
-        duration: 3000,
-      });
+      toast.error("Failed to remove file", { description: "Please try again.", duration: 3000 });
     }
   };
 
-  // --- Check if file is expired ---
   const isFileExpired = (expiresAt: Timestamp): boolean => {
     if (!expiresAt) return false;
     return expiresAt.toDate() < new Date();
   };
 
-  // --- File Download Handler ---
   const handleFileDownload = async (file: FileAttachmentData) => {
     try {
-      // Check if it's a data URL (Base64) or regular URL
       if (file.url.startsWith("data:")) {
-        // For Base64 data URLs, convert to blob URL for better browser compatibility
         const response = await fetch(file.url);
         const blob = await response.blob();
         const blobUrl = URL.createObjectURL(blob);
-        
         if (file.type === "application/pdf") {
-          // For PDFs, open in new tab with blob URL (works better than data URLs)
           const newWindow = window.open(blobUrl, "_blank");
           if (newWindow) {
-            // Clean up blob URL after window is closed or after delay
-            newWindow.addEventListener("beforeunload", () => {
-              URL.revokeObjectURL(blobUrl);
-            });
-            // Fallback cleanup after 5 minutes
+            newWindow.addEventListener("beforeunload", () => URL.revokeObjectURL(blobUrl));
             setTimeout(() => URL.revokeObjectURL(blobUrl), 5 * 60 * 1000);
           } else {
-            // If popup blocked, trigger download instead
             const a = document.createElement("a");
             a.href = blobUrl;
             a.download = file.name;
@@ -466,7 +376,6 @@ export default function RoomPage() {
             setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
           }
         } else {
-          // For other files, trigger download
           const a = document.createElement("a");
           a.href = blobUrl;
           a.download = file.name;
@@ -476,12 +385,9 @@ export default function RoomPage() {
           setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
         }
       } else {
-        // For regular URLs (Firebase Storage)
         if (file.type === "application/pdf") {
-          // Open PDF in new tab
           const newWindow = window.open(file.url, "_blank");
           if (!newWindow) {
-            // If popup blocked, fall back to download
             const a = document.createElement("a");
             a.href = file.url;
             a.download = file.name;
@@ -491,7 +397,6 @@ export default function RoomPage() {
             document.body.removeChild(a);
           }
         } else {
-          // For other files, trigger download
           const a = document.createElement("a");
           a.href = file.url;
           a.download = file.name;
@@ -503,461 +408,286 @@ export default function RoomPage() {
       }
     } catch (err) {
       console.error("Error downloading file:", err);
-      toast.error("Failed to open file", {
-        description: "Please try again.",
-      });
+      toast.error("Failed to open file", { description: "Please try again." });
     }
   };
 
-  // --- Render Logic: Loading State ---
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current++;
+    if (e.dataTransfer.types.includes("Files")) {
+      setIsDragOver(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current--;
+    if (dragCounter.current === 0) {
+      setIsDragOver(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current = 0;
+    setIsDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      await processFile(file);
+    }
+  }, [processFile]);
+
   if (loading) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background via-background to-muted/20 p-4">
-        <div className="text-center space-y-4">
-          <Loader2 className="mx-auto h-12 w-12 animate-spin text-primary" />
-          <h2 className="text-xl font-semibold">Loading Room...</h2>
-          <p className="text-muted-foreground">Connecting to {roomCode}</p>
+      <main className="flex min-h-screen items-center justify-center bg-background bg-dot-grid p-4">
+        <div className="w-full max-w-3xl animate-fade-in">
+          <div className="rounded-xl border bg-card/50 backdrop-blur-sm shadow-xl overflow-hidden">
+            <div className="border-b p-5">
+              <div className="flex items-center justify-between">
+                <div className="space-y-2">
+                  <div className="skeleton h-7 w-32 rounded" />
+                  <div className="skeleton h-4 w-20 rounded" />
+                </div>
+                <div className="flex gap-2">
+                  <div className="skeleton h-9 w-9 rounded-lg" />
+                  <div className="skeleton h-9 w-9 rounded-lg" />
+                  <div className="skeleton h-9 w-9 rounded-lg" />
+                </div>
+              </div>
+            </div>
+            <div className="p-6">
+              <div className="skeleton h-64 w-full rounded-lg" />
+            </div>
+            <div className="border-t p-4">
+              <div className="flex items-center justify-between">
+                <div className="skeleton h-4 w-40 rounded" />
+                <div className="flex gap-2">
+                  <div className="skeleton h-9 w-28 rounded-lg" />
+                  <div className="skeleton h-9 w-24 rounded-lg" />
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </main>
     );
   }
 
-  // --- Render Logic: Error State ---
   if (error) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background via-background to-muted/20 p-4">
-        <Card className="max-w-md shadow-2xl border-0 bg-card/50 backdrop-blur-sm">
-          <CardContent className="space-y-6 p-8 text-center">
-            <h1 className="text-2xl font-semibold text-destructive">{error}</h1>
-            <p className="text-muted-foreground">
+      <main className="flex min-h-screen items-center justify-center bg-background bg-dot-grid p-4">
+        <div className="w-full max-w-sm text-center space-y-6 animate-fade-in">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
+            <CloudOff className="h-8 w-8 text-destructive" />
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-2xl font-semibold">{error}</h1>
+            <p className="text-sm text-muted-foreground">
               The room you&apos;re looking for doesn&apos;t exist or has been removed.
             </p>
-            <Button onClick={() => router.push("/")} className="w-full">
-              <Home className="mr-2 h-4 w-4" />
-              Go Home
-            </Button>
-          </CardContent>
-        </Card>
+          </div>
+          <Button onClick={() => router.push("/")} className="gap-2">
+            <ArrowLeft className="h-4 w-4" />
+            Go Home
+          </Button>
+        </div>
       </main>
     );
   }
 
-  // --- Render Logic: Main Page ---
   return (
-    <main className="h-screen bg-gradient-to-br from-background via-background to-muted/20 flex flex-col overflow-hidden">
-      {/* Unified App Card */}
-      <Card className="flex w-full max-w-5xl flex-col shadow-2xl border-0 bg-card/50 backdrop-blur-sm h-full mx-auto my-4">
-        
-        {/* Card Header: Info & Page Actions */}
-        <CardHeader className="border-b">
+    <main className="h-screen bg-background bg-dot-grid flex flex-col overflow-hidden">
+      <div className="flex w-full max-w-4xl flex-col h-full mx-auto sm:my-4 sm:rounded-xl border bg-card/50 backdrop-blur-sm shadow-xl overflow-hidden animate-fade-in">
+        <div className="border-b px-4 py-3 sm:px-5 sm:py-4">
           <div className="flex items-center justify-between">
-            {/* Left Side: Title & Status */}
-            <div>
-              <CardTitle className="font-mono text-2xl tracking-widest text-primary">
+            <div className="flex items-center gap-3">
+              <h1 className="font-mono text-xl sm:text-2xl font-bold tracking-widest text-primary">
                 {roomCode}
-              </CardTitle>
-              <div className="mt-2 flex items-center space-x-2">
+              </h1>
+              <Badge
+                variant={isConnected ? "default" : "secondary"}
+                className="gap-1.5 text-[10px] font-normal px-2 py-0.5"
+              >
                 <span
-                  className={`h-2 w-2 rounded-full ${
-                    isConnected ? "bg-green-500" : "bg-gray-400"
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    isConnected ? "bg-green-400 animate-pulse-dot" : "bg-yellow-400"
                   }`}
                 />
-                <span className="text-xs text-muted-foreground">
-                  {isConnected ? "Connected" : "Connecting..."}
+                {isConnected ? "Live" : "Connecting"}
+              </Badge>
+              {saveStatus === "saving" && (
+                <span className="text-xs text-muted-foreground animate-fade-in">
+                  Saving...
                 </span>
-              </div>
+              )}
+              {saveStatus === "saved" && (
+                <span className="text-xs text-green-500 flex items-center gap-1 animate-fade-in">
+                  <Check className="h-3 w-3" />
+                  Saved
+                </span>
+              )}
             </div>
 
-            {/* Right Side: Page Actions */}
-            <div className="flex items-center space-x-2">
-              <Button onClick={shareRoom} variant="outline" size="icon">
-                <Share2 className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              >
-                <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-                <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-              </Button>
-              <Button
-                onClick={() => router.push("/")}
-                variant="outline"
-                size="icon"
-              >
-                <Home className="h-4 w-4" />
-              </Button>
+            <div className="flex items-center gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button onClick={shareRoom} variant="ghost" size="icon" className="h-9 w-9">
+                    <Share2 className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Share room</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9"
+                    onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                  >
+                    <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+                    <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Toggle theme</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    onClick={() => router.push("/")}
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9"
+                  >
+                    <Home className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Go home</TooltipContent>
+              </Tooltip>
             </div>
           </div>
-        </CardHeader>
+        </div>
 
-        {/* Card Content: The Editor (Stretches to fill space) */}
-        <CardContent className="flex flex-1 flex-col p-0 min-h-0">
-          {/* Files Section */}
-          {showFiles && room?.files && room.files.length > 0 && (
-            <div className="border-b p-4 space-y-3 max-h-64 overflow-y-auto">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold flex items-center gap-2">
-                  <File className="h-4 w-4" />
-                  Attached File
-                </h3>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Shield className="h-3 w-3" />
-                  <span>Auto-deletes in 30 min</span>
-                </div>
-              </div>
-              <div className="bg-muted/50 border border-primary/20 rounded-md p-2 text-xs text-muted-foreground flex items-start gap-2">
-                <Shield className="h-3 w-3 mt-0.5 flex-shrink-0" />
-                <div className="flex-1">
-                  <div>
-                    <strong>Privacy Feature:</strong> All uploaded files are automatically deleted after 30 minutes for your privacy and security.
-                  </div>
-                  <div className="mt-1.5 text-[10px] opacity-90 font-medium">
-                    📦 <strong>File Size Limit:</strong> Only files under 500KB are allowed. Files are stored for free using Base64 encoding.
-                  </div>
-                </div>
-              </div>
-              <div className="space-y-3">
-                {room.files.map((file) => {
-                  const expired = isFileExpired(file.expiresAt);
-                  return (
-                    <div
-                      key={file.id}
-                      className={`relative group border rounded-lg p-3 ${
-                        expired ? "opacity-50" : ""
-                      }`}
-                    >
-                      {isImageType(file.type) ? (
-                        <div className="space-y-2">
-                          <div className="relative group/image">
-                            <img
-                              src={file.url}
-                              alt={file.name}
-                              className="w-full h-32 object-cover rounded"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).style.display = "none";
-                              }}
-                            />
-                            {/* Remove button overlay for images */}
-                            <Button
-                              variant="destructive"
-                              size="icon"
-                              className="absolute top-2 right-2 h-7 w-7 opacity-0 group-hover/image:opacity-100 transition-opacity bg-destructive/90 hover:bg-destructive"
-                              onClick={() => handleFileDelete(file.id, file.name, file.storageType)}
-                              title="Remove file"
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs text-muted-foreground truncate flex-1" title={file.name}>
-                              {file.name}
-                            </span>
-                            <span className="text-xs text-muted-foreground ml-2">
-                              {formatFileSize(file.size)}
-                            </span>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2 flex-1 min-w-0">
-                            <File className="h-4 w-4 flex-shrink-0" />
-                            <div className="min-w-0 flex-1">
-                              <p className="text-sm truncate">{file.name}</p>
-                              <p className="text-xs text-muted-foreground">
-                                {file.originalSize && file.originalSize > file.size ? (
-                                  <>
-                                    {formatFileSize(file.size)}{" "}
-                                    <span className="text-muted-foreground/70">
-                                      (was {formatFileSize(file.originalSize)})
-                                    </span>
-                                  </>
-                                ) : (
-                                  formatFileSize(file.size)
-                                )}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8"
-                              onClick={() => handleFileDownload(file)}
-                              title={file.type === "application/pdf" ? "Open PDF" : "Download file"}
-                            >
-                              <Download className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="destructive"
-                              size="icon"
-                              className="h-8 w-8"
-                              onClick={() => handleFileDelete(file.id, file.name, file.storageType)}
-                              title="Remove file"
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </div>
-                      )}
-                      {expired && (
-                        <div className="absolute inset-0 bg-background/50 rounded-lg flex items-center justify-center">
-                          <span className="text-xs text-muted-foreground">Expired</span>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+        <div className="flex flex-1 flex-col min-h-0">
+          <FileSection
+            files={room?.files || []}
+            onFileDownload={handleFileDownload}
+            onFileDelete={handleFileDelete}
+            isFileExpired={isFileExpired}
+          />
 
-          {/* Text Editor */}
-          <div className="flex-1 flex flex-col min-h-0">
+          <div
+            className="relative flex-1 flex flex-col min-h-0"
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+          >
             <Textarea
               value={room?.text || ""}
               onChange={handleTextChange}
-              placeholder="Start typing..."
-              className="h-full w-full flex-1 resize-none border-0 bg-transparent p-6 font-mono text-base focus-visible:ring-0 overflow-y-auto"
+              placeholder="Start typing to share..."
+              className="h-full w-full flex-1 resize-none border-0 bg-transparent p-4 sm:p-6 font-mono text-sm sm:text-base focus-visible:ring-0 overflow-y-auto"
             />
-          </div>
-        </CardContent>
-
-        {/* Card Footer: Stats & Text Actions */}
-        <CardFooter className="flex flex-wrap items-center justify-between gap-4 border-t pt-4">
-          {/* Left Side: Stats */}
-          <div className="flex items-center space-x-4">
-            <Button
-              onClick={() => setShowStats(!showStats)}
-              variant="ghost"
-              size="icon"
-              className="text-muted-foreground"
-            >
-              {showStats ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </Button>
-            {showStats && (
-              <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-                <div className="flex items-center space-x-1.5">
-                  <Users className="h-3 w-3" />
-                  <span>{room?.text.length || 0} Chars</span>
-                </div>
-                <div className="flex items-center space-x-1.5">
-                  <Users className="h-3 w-3" />
-                  <span>
-                    {room?.text.trim()
-                      ? room.text.trim().split(/\s+/).length
-                      : 0}{" "}
-                    Words
-                  </span>
-                </div>
-                <div className="flex items-center space-x-1.5">
-                  <Clock className="h-3 w-3" />
-                  <span>
-                    Updated: {formatDate(room?.lastUpdatedAt)}
-                  </span>
+            {isDragOver && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center drop-zone-active m-2 rounded-lg">
+                <div className="text-center space-y-2">
+                  <Upload className="h-8 w-8 mx-auto text-primary" />
+                  <p className="text-sm font-medium">Drop file here</p>
                 </div>
               </div>
             )}
           </div>
-
-          {/* Right Side: Actions */}
-          <div className="flex items-center space-x-2">
-            {/* File Upload - Better UX with text label */}
-            {!room?.files || room.files.length === 0 ? (
-              <div className="relative">
-                <input
-                  type="file"
-                  id="file-upload"
-                  className="hidden"
-                  onChange={handleFileUpload}
-                  accept="image/*,.pdf,.txt,.json,.csv,.md"
-                  disabled={uploading}
-                  multiple={false}
-                />
-                <Button
-                  variant="outline"
-                  onClick={() => document.getElementById("file-upload")?.click()}
-                  disabled={uploading}
-                  className="gap-2"
-                >
-                  {uploading ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Uploading...
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="h-4 w-4" />
-                      Upload File
-                    </>
-                  )}
-                </Button>
-              </div>
-            ) : (
-              <div className="text-xs text-muted-foreground px-2">
-                1 file attached
-              </div>
-            )}
-            <Button
-              onClick={downloadText}
-              disabled={!room?.text}
-              variant="outline"
-            >
-              <Download className="mr-2 h-4 w-4" />
-              Download
-            </Button>
-            <Button
-              onClick={copyText}
-              disabled={!room?.text}
-              variant="default"
-            >
-              <Copy className="mr-2 h-4 w-4" />
-              Copy Text
-            </Button>
-          </div>
-        </CardFooter>
-
-        {/* Footer with GitHub Link */}
-        <div className="border-t px-6 py-3 text-center">
-          <p className="text-xs text-muted-foreground">
-            Made by{" "}
-            <a
-              href="https://github.com/Divy97"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-primary hover:underline"
-            >
-              Divy97
-            </a>
-          </p>
         </div>
-      </Card>
 
-      {/* Compression Dialog */}
-      {showCompressionDialog && pendingFile && compressionEstimate && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <Card className="max-w-md w-full shadow-2xl">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <File className="h-5 w-5" />
-                Compress File?
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <p className="text-sm font-medium mb-1">File: {pendingFile.name}</p>
-                <div className="text-sm text-muted-foreground space-y-1">
-                  <div className="flex justify-between">
-                    <span>Original size:</span>
-                    <span className="font-medium">{formatFileSize(compressionEstimate.originalSize)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Estimated size:</span>
-                    <span className="font-medium text-primary">
-                      {formatFileSize(compressionEstimate.estimatedSize)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-xs pt-1 border-t">
-                    <span>Reduction:</span>
-                    <span className="font-medium">
-                      {(
-                        ((compressionEstimate.originalSize - compressionEstimate.estimatedSize) /
-                          compressionEstimate.originalSize) *
-                        100
-                      ).toFixed(1)}
-                      %
-                    </span>
-                  </div>
-                </div>
-              </div>
+        <div className="border-t px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="hidden sm:flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
+              <span>{charCount} chars</span>
+              <span className="text-muted-foreground/30">|</span>
+              <span>{wordCount} words</span>
+            </div>
 
-              {pendingFile.type.startsWith("image/") && (
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">
-                    Quality: {Math.round(imageQuality * 100)}%
-                  </label>
+            <div className="flex items-center gap-2 sm:ml-auto">
+              {!room?.files || room.files.length === 0 ? (
+                <div className="relative">
                   <input
-                    type="range"
-                    min="0.5"
-                    max="0.95"
-                    step="0.05"
-                    value={imageQuality}
-                    onChange={async (e) => {
-                      const newQuality = parseFloat(e.target.value);
-                      setImageQuality(newQuality);
-                      // Recalculate estimate with new quality
-                      if (pendingFile) {
-                        try {
-                          const newEstimate = await getCompressionEstimate(pendingFile, newQuality);
-                          setCompressionEstimate(newEstimate);
-                        } catch (err) {
-                          console.error("Error recalculating estimate:", err);
-                        }
-                      }
-                    }}
-                    className="w-full"
-                    disabled={compressing}
+                    type="file"
+                    id="file-upload"
+                    className="hidden"
+                    onChange={handleFileUpload}
+                    accept="image/*,.pdf,.txt,.json,.csv,.md"
+                    disabled={uploading}
+                    multiple={false}
                   />
-                  <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>Lower quality (smaller)</span>
-                    <span>Higher quality (larger)</span>
-                  </div>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => document.getElementById("file-upload")?.click()}
+                        disabled={uploading}
+                        className="gap-2"
+                      >
+                        {uploading ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Upload className="h-4 w-4" />
+                        )}
+                        <span className="hidden sm:inline">
+                          {uploading ? "Uploading..." : "Upload"}
+                        </span>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Upload file (max 500KB)</TooltipContent>
+                  </Tooltip>
                 </div>
+              ) : (
+                <span className="text-xs text-muted-foreground px-2">1 file attached</span>
               )}
-
-              {pendingFile.type === "application/pdf" && (
-                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-md p-2 text-xs text-yellow-700 dark:text-yellow-400">
-                  <strong>Note:</strong> PDF compression has limited effectiveness. The file may not compress significantly. If compression doesn't work, please try a different file or reduce the PDF size using external tools.
-                </div>
-              )}
-
-              {compressionEstimate.estimatedSize > 500 * 1024 && (
-                <div className="bg-red-500/10 border border-red-500/30 rounded-md p-2 text-xs text-red-700 dark:text-red-400">
-                  <strong>Warning:</strong> Even after compression, the estimated size ({formatFileSize(compressionEstimate.estimatedSize)}) may still exceed the 500KB limit. Compression may not be sufficient for this file.
-                </div>
-              )}
-
-              {compressing && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span>Compressing...</span>
-                    <span>{compressionProgress}%</span>
-                  </div>
-                  <div className="w-full bg-muted rounded-full h-2">
-                    <div
-                      className="bg-primary h-2 rounded-full transition-all duration-300"
-                      style={{ width: `${compressionProgress}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-            </CardContent>
-            <CardFooter className="flex gap-2 justify-end">
-              <Button
-                variant="outline"
-                onClick={handleCancelCompression}
-                disabled={compressing}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleCompressAndUpload}
-                disabled={compressing || !compressionEstimate.canCompress}
-              >
-                {compressing ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Compressing...
-                  </>
-                ) : (
-                  "Compress & Upload"
-                )}
-              </Button>
-            </CardFooter>
-          </Card>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button onClick={downloadText} disabled={!room?.text} variant="outline" size="sm" className="gap-2">
+                    <Download className="h-4 w-4" />
+                    <span className="hidden sm:inline">Download</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Download as text file</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button onClick={copyText} disabled={!room?.text} variant="default" size="sm" className="gap-2">
+                    <Copy className="h-4 w-4" />
+                    <span className="hidden sm:inline">Copy</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Copy text to clipboard</TooltipContent>
+              </Tooltip>
+            </div>
+          </div>
         </div>
-      )}
+      </div>
+
+      <CompressionDialog
+        open={showCompressionDialog}
+        pendingFile={pendingFile}
+        compressionEstimate={compressionEstimate}
+        imageQuality={imageQuality}
+        compressing={compressing}
+        compressionProgress={compressionProgress}
+        onQualityChange={handleQualityChange}
+        onCompress={handleCompressAndUpload}
+        onCancel={handleCancelCompression}
+      />
     </main>
   );
 }

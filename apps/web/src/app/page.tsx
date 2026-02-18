@@ -4,8 +4,15 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
 import { toast } from "sonner";
-import { Loader2, Plus, ArrowRight, Sun, Moon } from "lucide-react";
+import { Loader2, Plus, ArrowRight, Sun, Moon, Lock, Zap, UserX } from "lucide-react";
 import { useTheme } from "next-themes";
 import { createRoom } from "@/lib/firebase-service";
 
@@ -49,40 +56,55 @@ export default function HomePage() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      {/* Header with Theme Toggle */}
-      <header className="absolute top-0 right-0 p-4">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-        >
-          <Sun className="h-5 w-5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-          <Moon className="absolute h-5 w-5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-          <span className="sr-only">Toggle theme</span>
-        </Button>
+    <div className="relative flex min-h-screen flex-col bg-background bg-dot-grid">
+      <header className="absolute top-0 right-0 p-4 z-10">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              className="rounded-full"
+            >
+              <Sun className="h-5 w-5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+              <Moon className="absolute h-5 w-5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+              <span className="sr-only">Toggle theme</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Toggle theme</TooltipContent>
+        </Tooltip>
       </header>
 
-      {/* Main Content */}
       <main className="flex flex-1 items-center justify-center p-4">
-        <div className="w-full max-w-sm space-y-8">
-          {/* Logo and Title */}
-          <div className="space-y-2 text-center">
-            <h1 className="pb-1 bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-5xl font-bold tracking-tighter text-transparent">
+        <div className="w-full max-w-sm stagger-children">
+          <div className="space-y-3 text-center">
+            <h1 className="pb-2 bg-gradient-to-r from-foreground via-foreground/80 to-foreground/50 bg-clip-text text-6xl font-bold tracking-tighter text-transparent">
               Bridge
             </h1>
             <p className="text-lg text-muted-foreground">
               Your real-time clipboard.
             </p>
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+              <Badge variant="secondary" className="gap-1.5 px-3 py-1 text-xs font-normal">
+                <Lock className="h-3 w-3" />
+                End-to-end encrypted
+              </Badge>
+              <Badge variant="secondary" className="gap-1.5 px-3 py-1 text-xs font-normal">
+                <Zap className="h-3 w-3" />
+                Real-time sync
+              </Badge>
+              <Badge variant="secondary" className="gap-1.5 px-3 py-1 text-xs font-normal">
+                <UserX className="h-3 w-3" />
+                No sign-up required
+              </Badge>
+            </div>
           </div>
 
-          {/* Actions */}
-          <div className="space-y-6">
-            {/* Create Room (Primary Action) */}
+          <div className="mt-10 space-y-6">
             <Button
               onClick={handleCreateRoom}
               disabled={isCreating || isJoining}
-              className="h-12 w-full text-base font-medium"
+              className="h-13 w-full text-base font-semibold shadow-lg shadow-primary/20 transition-shadow hover:shadow-xl hover:shadow-primary/30"
               size="lg"
             >
               {isCreating ? (
@@ -93,27 +115,25 @@ export default function HomePage() {
               Create New Room
             </Button>
 
-            {/* Divider */}
             <div className="relative">
               <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t" />
+                <Separator />
               </div>
               <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-background px-2 text-muted-foreground">
-                  Or
+                <span className="bg-background px-3 text-muted-foreground">
+                  Or join existing
                 </span>
               </div>
             </div>
 
-            {/* Join Room (Secondary Action) */}
-            <form onSubmit={handleJoinRoom} className="flex space-x-2">
+            <form onSubmit={handleJoinRoom} className="flex gap-2">
               <Input
                 value={roomCode}
                 onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
                 placeholder="AAAA"
                 maxLength={4}
                 disabled={isCreating || isJoining}
-                className="h-12 flex-1 text-center font-mono text-lg uppercase tracking-widest"
+                className="h-12 flex-1 text-center font-mono text-lg uppercase tracking-[0.3em]"
               />
               <Button
                 type="submit"
@@ -135,10 +155,9 @@ export default function HomePage() {
         </div>
       </main>
 
-      {/* Footer */}
       <footer className="flex items-center justify-center p-4">
-        <p className="text-xs text-muted-foreground">
-          Share text instantly. No sign-up required.
+        <p className="text-xs text-muted-foreground/60">
+          Share text instantly between devices.
         </p>
       </footer>
     </div>

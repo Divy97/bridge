@@ -165,9 +165,7 @@ export async function uploadFile(
 }
 
 // Convert FileAttachment to Firestore format
-export function fileAttachmentToFirestore(
-  attachment: FileAttachment
-): {
+interface FirestoreFileAttachment {
   id: string;
   name: string;
   type: string;
@@ -179,8 +177,12 @@ export function fileAttachmentToFirestore(
   data?: string;
   storageType?: "storage" | "base64";
   wasCompressed?: boolean;
-} {
-  const result: any = {
+}
+
+export function fileAttachmentToFirestore(
+  attachment: FileAttachment
+): FirestoreFileAttachment {
+  const result: FirestoreFileAttachment = {
     id: attachment.id,
     name: attachment.name,
     type: attachment.type,
