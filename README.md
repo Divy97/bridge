@@ -1,66 +1,37 @@
 # Bridge
 
-**Instant, encrypted text and file sharing.** No accounts. No hassle. Just share.
+**The clipboard that connects people.**
 
-[Live Demo](https://bridgee.vercel.app)
+[Try it now →](https://bridgee.vercel.app)
 
-## What is it?
+## What is Bridge?
 
-Bridge lets you create a room, share the link, and instantly collaborate with anyone. Everything is end-to-end encrypted and auto-deletes after 30 minutes.
+Bridge is a simple way to share text and files with anyone, instantly. No accounts, no downloads, no sign-ups. Just create a room, share the link, and start collaborating.
 
-## Features
+## How it works
 
-- **Real-time sync** – See changes instantly across all devices
-- **End-to-end encryption** – Your data is encrypted before it hits the server
-- **File sharing** – Images, PDFs, text files up to 500KB (stored as Base64 in Firestore)
-- **No sign-up required** – Anonymous rooms, instant access
-- **Auto-cleanup** – Rooms and files deleted after 30 minutes
+1. **Create a room** – Click a button, get a unique 4-letter code
+2. **Share the link** – Send it via text, email, Slack, anywhere
+3. **Collaborate in real-time** – Everyone sees changes as they happen
+4. **Done automatically** – Everything disappears after 30 minutes
 
-## Tech Stack
+## Perfect for
 
-- Next.js 16 + React 19
-- TypeScript (strict)
-- Tailwind CSS + shadcn/ui
-- Firebase (Firestore, Auth)
-- AES-256-GCM encryption
+- **Quick notes** – Share a grocery list, meeting notes, or ideas
+- **Code snippets** – Paste code and share with your team
+- **File transfers** – Send images, PDFs, or documents on the fly
+- **Temporary collaboration** – Plan a trip, draft a message, brainstorm
 
-## Quick Start
+## Why Bridge?
 
-```bash
-# Install dependencies
-pnpm install
+**No friction** – Open the link and you're in. No "create an account" screens.
 
-# Set up environment variables
-cp apps/web/.env.local.example apps/web/.env.local
-# Edit apps/web/.env.local with your Firebase config
+**Private by design** – Everything is encrypted. We can't read your data even if we wanted to.
 
-# Run dev server
-pnpm dev
-```
+**Self-destructing** – Rooms vanish after 30 minutes. No digital breadcrumbs left behind.
 
-## Environment Variables
+**Works everywhere** – Phone, tablet, laptop. Any browser, any device.
 
-```bash
-# Firebase
-NEXT_PUBLIC_FIREBASE_API_KEY=
-NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=
-NEXT_PUBLIC_FIREBASE_PROJECT_ID=
-NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=
-NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
-NEXT_PUBLIC_FIREBASE_APP_ID=
+## Open Source
 
-# Encryption (generate with: openssl rand -base64 32)
-NEXT_PUBLIC_ENCRYPTION_KEY=
-```
-
-## Deployment
-
-Configured for Vercel. Push to deploy:
-
-```bash
-vercel --prod
-```
-
-## License
-
-MIT
+Bridge is open source and free to use. Built with love by [Divy](https://github.com/Divy97).
